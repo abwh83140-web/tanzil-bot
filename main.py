@@ -5,23 +5,25 @@ import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
+# إعداد السجلات (Logging)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# جلب التوكن من المتغيرات أو استخدام التوكن المباشر
 TOKEN = os.environ.get("TOKEN", "8789453928:AAGlimSktG-zLypM6rMsMwec27_N7wNzDKs")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 أهلاً بك! أرسل رابط الفيديو واختر الجودة التي تناسبك.")
+    await update.message.reply_text("👋 أهلاً بك في بوت التحميل السريع!\nأرسل لي أي رابط فيديو (فيسبوك، تيك توك، يوتيوب...) وسأقوم بتحميله فوراً.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     if not url.startswith("http"):
-        await update.message.reply_text("⚠️ الرجاء إرسال رابط صحيح.")
+        await update.message.reply_text("⚠️ الرجاء إرسال رابط صحيح يبدأ بـ http أو https.")
         return
 
-    msg = await update.message.reply_text("⏳ جاري تحليل الرابط واستخراج الجودات المتاحة...")
+    msg = await update.message.reply_text("⏳ جاري فحص الرابط وجلب الجودات المتاحة...")
 
-    # حفظ الرابط في جلسة المستخدم
+    # حفظ الرابط في جلسة المستخدم لمنع خطأ Button_data_invalid
     context.user_data['url'] = url
 
     try:
@@ -37,9 +39,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # خيارات الجودة المتاحة
         keyboard = [
-            [InlineKeyboardButton("🎬 أعلى جودة متاحة (Best)", callback_data="f_best")],
-            [InlineKeyboardButton("📺 1080p HD", callback_data="f_1080"), InlineKeyboardButton("📺 720p HD", callback_data="f_720")],
-            [InlineKeyboardButton("📱 480p SD", callback_data="f_480"), InlineKeyboardButton("📱 360p SD", callback_data="f_360")],
+            [InlineKeyboardButton("🎬 أعلى جودة (Best)", callback_data="f_best")],
+            [InlineKeyboardButton("📺 1080p", callback_data="f_1080"), InlineKeyboardButton("📺 720p", callback_data="f_720")],
+            [InlineKeyboardButton("📱 480p", callback_data="f_480"), InlineKeyboardButton("📱 360p", callback_data="f_360")],
             [InlineKeyboardButton("🎵 تحميل صوت فقط (Audio)", callback_data="f_audio")]
         ]
 
@@ -50,7 +52,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error extracting info: {e}")
         await msg.edit_text(f"❌ حدث خطأ أثناء فحص الرابط:\n`{str(e)[:100]}`", parse_mode="Markdown")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -64,28 +66,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ انتهت الجلسة، أرسل الرابط مجدداً.")
         return
 
-    await query.edit_message_text("🚀 جاري التحميل فوراً... انتظر لحظات.")
+    await query.edit_message_text("🚀 جاري التحميل والمعالجة فوراً... انتظر لحظات.")
     user_id = query.from_user.id
 
-    # تحديد معايير التنزيل حسب الجودة
+    # معايير التحميل المرنة لجميع المنصات (Facebook / TikTok / YouTube)
     if choice == "f_best":
-        fmt = "best[ext=mp4]/best"
+        fmt = "b/best"
         ext = "mp4"
     elif choice == "f_1080":
-        fmt = "bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]"
+        fmt = "bv*[height<=1080]+ba/b[height<=1080]/b"
         ext = "mp4"
     elif choice == "f_720":
-        fmt = "bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720]"
+        fmt = "bv*[height<=720]+ba/b[height<=720]/b"
         ext = "mp4"
     elif choice == "f_480":
-        fmt = "bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480]"
+        fmt = "bv*[height<=480]+ba/b[height<=480]/b"
         ext = "mp4"
     elif choice == "f_360":
-        fmt = "bestvideo[height<=360][ext=mp4]+bestaudio/best[height<=360]"
+        fmt = "bv*[height<=360]+ba/b[height<=360]/b"
         ext = "mp4"
     elif choice == "f_audio":
-        fmt = "bestaudio/best"
-        ext = "m4a"  # صيغة تعمل مباشرة دون الحاجة لـ ffmpeg
+        fmt = "ba/b"
+        ext = "m4a"
 
     out_file = f"dl_{user_id}.{ext}"
 
@@ -125,7 +127,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"❌ حدث خطأ أثناء التحميل:\n`{str(e)[:100]}`", parse_mode="Markdown")
 
     finally:
-        # تنظيف أي ملفات مؤقتة
+        # تنظيف أية ملفات مؤقتة فوراً للحفاظ على مساحة السيرفر
         for file in os.listdir('.'):
             if file.startswith(f"dl_{user_id}"):
                 try:

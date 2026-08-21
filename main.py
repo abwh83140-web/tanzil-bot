@@ -1,123 +1,125 @@
 import os
+import logging
 import asyncio
+import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from yt_dlp import YoutubeDL
 
-# التوكن الخاص بك
+# إعداد السجلات (Logging)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# جلب التوكن من المتغيرات أو التوكن المباشر
 TOKEN = os.environ.get("TOKEN", "8789453928:AAGlimSktG-zLypM6rMsMwec27_N7wNzDKs")
 
-YDL_OPTIONS_INFO = {
-    'quiet': True,
-    'no_warnings': True,
-    'extract_flat': False,
-}
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 أهلاً بك! أرسل لي رابط الفيديو وسأقوم باستخراج الجودات المتاحة لتحميله بأقصى سرعة.")
+    await update.message.reply_text("👋 أهلاً بك! أرسل لي أي رابط فيديو (تيك توك، يوتيوب، فيسبوك...) وسأقوم بتحميله لك بأعلى سرعة.")
 
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    if not url.startswith(("http://", "https://")):
+    if not url.startswith("http"):
+        await update.message.reply_text("⚠️ الرجاء إرسال رابط صحيح يبدأ بـ http أو https.")
         return
 
-    msg = await update.message.reply_text("⚡ جاري فحص الرابط واستخراج الصيغ المتاحة...")
+    msg = await update.message.reply_text("⏳ جاري فحص الرابط وجلب البيانات...")
+
+    # حفظ الرابط في ذاكرة المستخدم لمنع خطأ Button_data_invalid
+    context.user_data['url'] = url
 
     try:
+        ydl_opts = {'quiet': True, 'no_warnings': True}
         loop = asyncio.get_running_loop()
-        with YoutubeDL(YDL_OPTIONS_INFO) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
-
-        formats = info.get('formats', [])
-        title = info.get('title', 'Video')
         
-        keyboard = []
-        seen_qualities = set()
+        def extract_info():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(url, download=False)
 
-        for f in formats:
-            height = f.get('height')
-            ext = f.get('ext')
-            format_id = f.get('format_id')
-            
-            if height and height not in seen_qualities and ext == 'mp4':
-                seen_qualities.add(height)
-                button_text = f"🎬 {height}p (MP4)"
-                keyboard.append([InlineKeyboardButton(button_text, callback_data=f"{format_id}|{url}")])
+        info = await loop.run_in_executor(None, extract_info)
+        title = info.get('title', 'فيديو')[:35]  # اختصار العنوان
 
-        keyboard.append([InlineKeyboardButton("🎵 تحميل صوت فقط (MP3)", callback_data=f"audio|{url}")])
-
+        # خيارات التحميل بأكواد قصيرة جداً لا تتجاوز حد تليجرام
+        keyboard = [
+            [InlineKeyboardButton("🎬 أعلى جودة فيديو (Best Quality)", callback_data="dl_best")],
+            [InlineKeyboardButton("🎵 تحميل صوت فقط (MP3)", callback_data="dl_audio")]
+        ]
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await msg.edit_text(f"🎥 **{title}**\n\nاختر الجودة أو الصيغة المطلوبة للتحميل:", reply_markup=reply_markup, parse_mode="Markdown")
+        await msg.edit_text(f"📹 **العنوان:** {title}\n\nاختر الخيار المطلوب للتحميل:", reply_markup=reply_markup, parse_mode="Markdown")
 
     except Exception as e:
-        await msg.edit_text(f"❌ حدث خطأ أثناء فحص الرابط:\n`{str(e)}`", parse_mode="Markdown")
+        logger.error(f"Error extracting info: {e}")
+        await msg.edit_text(f"❌ حدث خطأ أثناء فحص الرابط:\n`{str(e)[:100]}`", parse_mode="Markdown")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    format_id, url = query.data.split("|")
-    await query.edit_message_text("⚡ جاري التحميل بأقصى سرعة...")
+    data = query.data
+    url = context.user_data.get('url')
 
-    os.makedirs("downloads", exist_ok=True)
-    file_path = None
+    if not url:
+        await query.edit_message_text("❌ انتهت الجلسة، يرجى إرسال الرابط من جديد.")
+        return
+
+    await query.edit_message_text("🚀 جاري التحميل والمعالجة فوراً... انتظر لحظات.")
+
+    user_id = query.from_user.id
+    out_file = f"dl_{user_id}.mp4"
 
     try:
-        loop = asyncio.get_running_loop()
-        
-        if format_id == "audio":
-            dl_opts = {
+        if data == "dl_best":
+            ydl_opts = {
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'outtmpl': out_file,
+                'quiet': True,
+                'merge_output_format': 'mp4'
+            }
+        elif data == "dl_audio":
+            out_file = f"dl_{user_id}.mp3"
+            ydl_opts = {
                 'format': 'bestaudio/best',
-                'outtmpl': 'downloads/%(title)s.%(ext)s',
+                'outtmpl': out_file,
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }],
-                'concurrent_fragment_downloads': 10,
-            }
-        else:
-            dl_opts = {
-                'format': f"{format_id}+bestaudio/best",
-                'outtmpl': 'downloads/%(title)s.%(ext)s',
-                'merge_output_format': 'mp4',
-                'concurrent_fragment_downloads': 10,
+                'quiet': True
             }
 
+        loop = asyncio.get_running_loop()
         def download():
-            with YoutubeDL(dl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(info)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
 
-        file_path = await loop.run_in_executor(None, download)
+        await loop.run_in_executor(None, download)
 
-        if not os.path.exists(file_path):
-            base_name = os.path.splitext(file_path)[0]
-            if os.path.exists(f"{base_name}.mp4"):
-                file_path = f"{base_name}.mp4"
-
-        await query.edit_message_text("🚀 جاري رفع الملف إلى تلجرام...")
-        
-        with open(file_path, 'rb') as file:
-            if format_id == "audio":
-                await query.message.reply_audio(audio=file)
+        # إرسال الملف للمستخدم
+        with open(out_file, 'rb') as f:
+            if data == "dl_audio":
+                await context.bot.send_audio(chat_id=query.message.chat_id, audio=f)
             else:
-                await query.message.reply_video(video=file)
+                await context.bot.send_video(chat_id=query.message.chat_id, video=f, supports_streaming=True)
 
-        await query.delete_message()
+        await query.message.delete()
 
     except Exception as e:
-        await query.edit_message_text(f"❌ فشل التحميل:\n`{str(e)}`", parse_mode="Markdown")
-    
-    finally:
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
+        logger.error(f"Download error: {e}")
+        await query.edit_message_text(f"❌ حدث خطأ أثناء التحميل:\n`{str(e)[:100]}`", parse_mode="Markdown")
 
-if __name__ == '__main__':
+    finally:
+        # حذف الملف الفعلي فوراً للحفاظ على مساحة السيرفر
+        if os.path.exists(out_file):
+            os.remove(out_file)
+
+def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_callback))
     
-    print("البوت يعمل الآن...")
+    logger.info("Starting Bot...")
     app.run_polling()
+
+if __name__ == "__main__":
+    main()

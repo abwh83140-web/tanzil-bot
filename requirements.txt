@@ -1,2 +1,5 @@
 python-telegram-bot
 yt-dlp
+python-telegram-bot
+yt-dlp
+google-play-scraper
